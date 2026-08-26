@@ -43,3 +43,6 @@ next-env.d.ts
 # uploaded files (local storage driver)
 /.uploads
 !.env.example
+
+# local tooling
+/.claude
