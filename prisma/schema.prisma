@@ -1,0 +1,175 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------- auth ----------
+
+model User {
+  id            String    @id @default(cuid())
+  name          String?
+  email         String    @unique
+  emailVerified DateTime?
+  image         String?
+  passwordHash  String? // null for OAuth-only users
+  createdAt     DateTime  @default(now())
+
+  accounts    Account[]
+  rooms       DataRoom[]
+  shares      Share[]
+  shareGrants ShareGrant[]
+}
+
+// OAuth accounts (Auth.js). Only used when Google sign-in is configured.
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String?
+  access_token      String?
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String?
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+}
+
+// ---------- data room ----------
+
+model DataRoom {
+  id        String   @id @default(cuid())
+  name      String
+  ownerId   String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  owner   User     @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  folders Folder[]
+  files   File[]
+  shares  Share[]
+
+  @@index([ownerId])
+}
+
+model Folder {
+  id       String  @id @default(cuid())
+  name     String
+  roomId   String
+  parentId String? // null = lives at the room root
+  // Materialized path of ancestor folder ids: "/" for root-level folders,
+  // "/<id>/" for their children, "/<id>/<id>/" below that. Lets us fetch or
+  // aggregate a whole subtree with a single prefix query instead of recursion.
+  path      String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  room     DataRoom @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  parent   Folder?  @relation("FolderTree", fields: [parentId], references: [id], onDelete: Cascade)
+  children Folder[] @relation("FolderTree")
+  files    File[]
+
+  @@index([roomId, parentId])
+  @@index([roomId, path])
+}
+
+model File {
+  id       String  @id @default(cuid())
+  name     String
+  roomId   String
+  folderId String? // null = lives at the room root
+  // Mirrors the latest version's size so folder/room totals are a plain SUM.
+  size      Int
+  mimeType  String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  room     DataRoom      @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  folder   Folder?       @relation(fields: [folderId], references: [id], onDelete: Cascade)
+  versions FileVersion[]
+
+  @@index([roomId, folderId])
+  @@index([roomId, name])
+}
+
+// Uploading a file whose name already exists in a folder creates a new
+// version instead of a duplicate. The highest version number is current.
+model FileVersion {
+  id         String   @id @default(cuid())
+  fileId     String
+  version    Int
+  storageKey String // local: relative path under .uploads/; blob: full URL
+  size       Int
+  createdAt  DateTime @default(now())
+
+  file File @relation(fields: [fileId], references: [id], onDelete: Cascade)
+
+  @@unique([fileId, version])
+}
+
+// ---------- sharing ----------
+
+enum ShareResourceType {
+  ROOM
+  FOLDER
+  FILE
+}
+
+enum ShareMode {
+  PUBLIC // anyone with the link
+  RESTRICTED // only invited people
+}
+
+enum ShareRole {
+  VIEWER
+  // EDITOR is intentionally reserved: adding write access later is a new enum
+  // value plus permission checks, not a schema change.
+}
+
+model Share {
+  id    String @id @default(cuid())
+  token String @unique // unguessable, generated with crypto.randomBytes
+
+  // Polymorphic target. resourceId has no FK on purpose (it can point at a
+  // room, folder or file); resolveShare() treats a missing target as revoked.
+  resourceType ShareResourceType
+  resourceId   String
+  roomId       String // denormalized so room deletion cascades to its shares
+
+  mode        ShareMode
+  role        ShareRole @default(VIEWER)
+  createdById String
+  createdAt   DateTime  @default(now())
+  revokedAt   DateTime?
+
+  room      DataRoom     @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  createdBy User         @relation(fields: [createdById], references: [id], onDelete: Cascade)
+  grants    ShareGrant[]
+
+  @@index([resourceType, resourceId])
+  @@index([roomId])
+}
+
+model ShareGrant {
+  id      String  @id @default(cuid())
+  shareId String
+  email   String // always lowercased
+  userId  String? // linked once the invitee has an account
+  createdAt DateTime @default(now())
+
+  share Share @relation(fields: [shareId], references: [id], onDelete: Cascade)
+  user  User? @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([shareId, email])
+  @@index([email])
+  @@index([userId])
+}
