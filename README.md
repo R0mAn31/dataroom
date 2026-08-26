@@ -208,6 +208,41 @@ pnpm dev
 Without `BLOB_READ_WRITE_TOKEN`, uploads land in `.uploads/` on disk — the full
 flow works with no external services.
 
+## Testing
+
+Three layers, each with a different DB story:
+
+```bash
+pnpm test:unit          # lib/names.ts, lib/format.ts — pure functions, no DB
+pnpm test:integration   # route handlers + lib/access.ts against real Postgres
+pnpm test:e2e           # Playwright, drives a real build in a real browser
+```
+
+Unit tests need nothing set up. Integration and e2e each need `DATABASE_URL`
+pointing at a **disposable** database — they truncate it before running:
+
+```bash
+createdb dataroom_test && DATABASE_URL=postgresql://…/dataroom_test npx prisma migrate deploy
+createdb dataroom_e2e  && DATABASE_URL=postgresql://…/dataroom_e2e  npx prisma migrate deploy
+
+DATABASE_URL=postgresql://…/dataroom_test pnpm test:integration
+DATABASE_URL=postgresql://…/dataroom_e2e AUTH_SECRET=test AUTH_TRUST_HOST=true pnpm test:e2e
+```
+
+Integration tests call route handlers directly (no HTTP server) with
+`lib/auth`'s session lookup mocked to a fixed test user — real Prisma queries,
+no cookie/JWT plumbing to fake. E2E runs `next build && next start` and drives
+it with a real Chromium instance end to end: register → create room → nested
+folders → upload → version conflict → rename conflict → move → share (public
+link + revoke, restricted invite + wrong-account block).
+
+**CI** (`.github/workflows/ci.yml`) runs on every push to `main` and every PR:
+typecheck + lint + build, unit tests, and integration tests (Postgres as a
+GitHub Actions service container). **E2E only runs on pull requests** — it's a
+gate before merging into `main`, not a check against anything deployed; the
+whole app and its database are spun up fresh inside that CI job and thrown
+away afterward, so there's nothing running on a real server to break.
+
 ## Deploying
 
 1. **Neon** (or any Postgres): create a database, copy the connection string.
@@ -235,3 +270,12 @@ wrong-account and deleted-mid-browse paths) was exercised in a real browser
 before it went in. Bugs found in that testing (a Radix `asChild` prop
 forwarding issue, hover-only actions being unreachable on touch) were fixed
 the same way.
+
+The test suite and CI workflow followed the same pattern: I specified the
+shape (unit vs. integration vs. e2e, what runs where, e2e gated to PRs so it
+never touches a real server) before anything was written, then the tests were
+actually run — not just generated — against local Postgres instances and a
+real Chromium browser. The first e2e run caught five real issues (ambiguous
+locators matching leftover DOM, an unlabeled select breaking `getByLabel`, a
+sign-out race), which were fixed and re-run to green rather than left in the
+diff.

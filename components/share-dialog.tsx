@@ -221,7 +221,9 @@ function ShareDialogBody({ onOpenChange, resource, ownerEmail }: ShareDialogProp
             <Separator />
 
             <div className="space-y-2">
-              <p className="text-sm font-medium">General access</p>
+              <label htmlFor="general-access" className="text-sm font-medium">
+                General access
+              </label>
               <div className="flex items-center gap-2.5">
                 <span className="grid size-8 shrink-0 place-items-center rounded-full bg-muted">
                   {state.public ? (
@@ -235,7 +237,7 @@ function ShareDialogBody({ onOpenChange, resource, ownerEmail }: ShareDialogProp
                   onValueChange={(v) => setGeneralAccess(v as "restricted" | "public")}
                   disabled={switchingAccess}
                 >
-                  <SelectTrigger className="w-full">
+                  <SelectTrigger id="general-access" className="w-full">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
