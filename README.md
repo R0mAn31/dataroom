@@ -1,78 +1,60 @@
 # Strongroom — Data Room MVP
 
-A virtual data room for due diligence: organized folders, versioned documents,
-and controlled sharing. Built as a take-home project for the Acme Corp.
-acquisition scenario.
+Data room for due diligence: nested folders, versioned files, public/restricted
+sharing with revocation. Take-home for the Acme Corp. acquisition scenario.
 
-**Live demo:** _add your Vercel URL here_
-**Demo account:** _add after deploying, or register — email/password signup is open_
+**Live:** https://dataroom-rosy.vercel.app
+**Account:** register with any email/password, no invite needed.
 
 ---
 
-## What's implemented
+## Implemented
 
-**Folders**
-- Create, nest arbitrarily deep, rename, delete
-- Breadcrumb navigation at every level
-- Deleting a folder first shows exactly what will go with it (subtree folder
-  count, file count, total size), then cascades
+**Folders** — create, nest, rename, delete. Breadcrumbs at every level.
+Deleting one shows real subtree stats first (N folders, M files, size) before
+anything happens.
 
-**Files**
-- Multi-file upload with drag-and-drop and per-file progress
-- PDF (and image) preview right in the browser
-- Rename with per-folder conflict detection (409 surfaces inline in the dialog)
-- Move to any folder via a tree picker — a name clash in the destination is
-  resolved with a ` (2)` suffix automatically, and the toast tells you
-- Delete (removes all versions from storage too)
-- **Versioning on name conflicts** (extra credit): uploading `NDA.pdf` into a
-  folder that already has one stacks it as v2 instead of duplicating — the
-  table shows a version badge and the file page has a version history with
-  per-version downloads
+**Files** — multi-file drag-and-drop upload with per-file progress, cancel,
+and retry. PDF/image preview in-browser. Rename with conflict detection (409,
+shown inline). Move via a folder-tree picker; a name clash in the destination
+auto-suffixes. Delete removes every stored version too.
 
-**Sharing**
-- Share a whole data room, a folder, or a single file — recipients get
-  read-only access to the item and everything nested under it
-- Two modes, Google-Drive-style, in one dialog:
-  - **Restricted** — invite specific people by email. Invites work even if the
-    person has no account yet; the grant links up when they register.
-  - **Anyone with the link** — public token URL
-- Owner revokes by removing a person or turning link access off; the link dies
-  immediately for everyone ("This link is no longer available")
-- Viewing a shared item that was deleted mid-browse degrades gracefully to the
-  same unavailable screen — deleted, revoked, and never-existed are
-  intentionally indistinguishable to visitors
-- "Shared with me" page lists everything you've been granted
+**Versioning (extra credit)** — uploading a name that already exists in a
+folder stacks it as a new version instead of duplicating. Version badge in the
+table, full history + per-version download on the file page.
 
-**Search** (extra credit): name search across the whole room from anywhere in
-it, jumping straight to the folder or file.
+**Sharing** — share a room, folder, or file. Two modes in one dialog:
+restricted (invite by email, works pre-signup — the grant attaches on
+registration) or public link. Owner revokes anytime; the link dies immediately
+for everyone. A share pointing at something since deleted shows the same
+"unavailable" screen as a revoked or unknown link — on purpose, so a visitor
+can't tell which happened. "Shared with me" lists everything granted to you.
 
-**Auth**: email/password (bcrypt). Google sign-in is wired and appears
-automatically when `GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET` are set.
+**Search (extra credit)** — name search across a room from wherever you're
+standing in it.
 
-## Stack and key decisions
+**Auth** — email/password. Google sign-in shows up automatically once
+`GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET` are set.
 
-| Layer | Choice | Why |
-|---|---|---|
-| App | Next.js 16 (App Router, TS) — one deployable | Backend is API route handlers + server components over Prisma. One Vercel deploy, no cold-start on a separate API host, and the assignment allows any Node framework. |
-| DB | PostgreSQL + Prisma | Relational fits the tree + sharing model; Prisma migrations document the schema. |
-| Storage | Vercel Blob (prod) / local disk (dev) behind one interface | `lib/storage.ts` is the only file that knows which backend is active. Dev needs zero external services. |
-| Auth | Auth.js v5 (credentials + optional Google) | JWT sessions; `session.user.id` drives every ownership check. |
-| UI | Tailwind v4 + shadcn/ui (Radix) | Granular components: the file table, dialogs, share dialog, upload panel, breadcrumbs are all reusable pieces — the read-only share view reuses the same `ItemTable` with different action slots. |
+## Stack
 
-Two decisions worth calling out:
+Next.js 16 (App Router, TS) for both frontend and backend — one deployable,
+API routes + server components over Prisma/Postgres. Auth.js v5 (JWT
+sessions). Tailwind v4 + shadcn/ui. File storage behind one interface
+(`lib/storage.ts`): Vercel Blob in prod, local disk in dev, so nothing external
+is required to run it.
 
-1. **Uploads never pass through the server in production.** The browser asks
-   `/api/uploads/blob` for a scoped token (ownership of the target room is
-   verified server-side), streams the file directly to Blob storage with
-   progress events, then registers the metadata via `POST /api/files`. No
-   serverless body-size limit, real progress bars. In dev the same flow posts
-   to a local-disk route instead.
+Two things worth flagging:
 
-2. **Downloads always pass through the server.** `GET /api/files/:id/content`
-   checks access (owner? valid share token covering this file? restricted
-   grant for this signed-in user?) and streams bytes from whichever backend.
-   Storage URLs are never handed to clients, so revoking a share actually
-   revokes access to content, not just to metadata.
+- **Uploads skip the server.** The browser gets a scoped token from
+  `/api/uploads/blob` (room ownership checked first), streams straight to
+  Blob, then registers the metadata. No serverless body-size limit, real
+  progress events, and now cancel/retry per file via `AbortController`.
+- **Downloads always go through the server.** `/api/files/:id/content` checks
+  access (owner, valid share token, or a restricted grant) before streaming.
+  The storage URL is never handed to the client, so revoking a share actually
+  cuts off content, not just the DB row. Blobs are uploaded `access: private`
+  for the same reason — the raw URL 403s without our server's token.
 
 ## Data model
 
@@ -129,97 +111,84 @@ erDiagram
     }
 ```
 
-- **`Folder.path` is a materialized path** of ancestor ids (`/` for root-level,
-  `/<idA>/<idB>/` deeper). A whole subtree is one indexed prefix query —
-  no recursive CTE per page view. Folders never move in this MVP, so paths
-  never need rewriting; if folder-move ships, it's one transaction rewriting
-  descendant prefixes.
-- **`Share` is polymorphic** (`resourceType` + `resourceId`): one table, one
-  dialog, one permission path for rooms, folders and files. `roomId` is
-  denormalized with a real FK so deleting a room cascades to its shares;
-  deleting a folder/file explicitly revokes shares pointing into it, and
-  `resolveShareByToken` treats a dangling target as revoked anyway.
-- **Versions**: the current version is the highest `version` number;
-  `File.size` mirrors it so aggregates are a plain `SUM(size)`.
+- `Folder.path` is a materialized path (`/` at root, `/<id>/<id>/` deeper) —
+  a subtree is one indexed prefix query, no recursion. Folders don't move in
+  this MVP, so paths never need rewriting.
+- `Share` is polymorphic (`resourceType` + `resourceId`) — one table for
+  room/folder/file shares instead of three. `roomId` is a real FK so deleting
+  a room cascades to its shares; deleting a folder/file explicitly revokes
+  anything pointing inside it, and a dangling target resolves as revoked
+  anyway.
+- Current version = highest `version` number; `File.size` mirrors it so
+  aggregates stay a plain `SUM`.
 
 ## How it scales
 
-**Total size / item count of a folder including its subtree.**
-Today: subtree folder ids come from one `path LIKE 'prefix%'` query on the
-`(roomId, path)` index, then one `aggregate` over files with `folderId IN (…)`
-(`folders`, `files`, `bytes` — this is exactly what the delete-warning and
-stats endpoints do). Room-level totals are a single `GROUP BY roomId`.
-At the next order of magnitude: keep cached `totalSize`/`itemCount` columns on
-`Folder`/`DataRoom`, updated transactionally (or via an async queue) on
-upload/delete/move — each mutation touches only the ancestor chain, which the
-materialized path gives us for free. The read path never walks the tree.
+**Folder subtree size/count.** One `path LIKE 'prefix%'` query on
+`(roomId, path)` gets every descendant folder id, then one `aggregate` over
+files with `folderId IN (…)` — that's what the delete warning and stats
+endpoint already do. At real scale: cache `totalSize`/`itemCount` on
+`Folder`/`DataRoom`, update them on upload/delete/move (only the ancestor
+chain needs touching, which the materialized path gives for free). Reads stop
+walking the tree entirely.
 
-**One room with 100,000 files.**
-- *Listing*: views already query per-folder (`(roomId, folderId)` index), never
-  the whole room, so a huge room only hurts a folder that itself holds
-  thousands of items — add cursor pagination (`orderBy (name, id)`, `take` +
-  `cursor`) to `listChildren` and an infinite-scroll table; the API shape
-  doesn't change.
-- *Indexes*: already in place — `(roomId, parentId)`, `(roomId, path)`,
-  `(roomId, folderId)`, `(roomId, name)`. For search at that scale, swap
-  `contains` for a `pg_trgm` GIN index on `File.name` (Prisma raw migration);
-  same endpoint, same UI.
-- *Aggregates*: switch from on-read `SUM` to the cached counters above.
-- *Uploads*: already direct-to-Blob, so 100k files is a metadata problem, not
-  a bandwidth problem.
+**100,000 files in one room.** Listing already queries per folder
+(`(roomId, folderId)` index), not the whole room — add cursor pagination
+(`orderBy (name, id)` + `take`/`cursor`) once a single folder gets big, same
+API shape. Indexes for this are already in place: `(roomId, parentId)`,
+`(roomId, path)`, `(roomId, folderId)`, `(roomId, name)`. Search would move
+from `contains` to a `pg_trgm` GIN index. Aggregates move to the cached
+counters above. Uploads are already direct-to-Blob, so it's a metadata
+scaling problem, not a bandwidth one.
 
-**Per-user roles (viewer/editor) without remodeling.**
-The schema already carries `Share.role` with `EDITOR` reserved in the enum.
-Because every mutation route funnels through the same ownership helpers
-(`requireOwnedRoom/Folder/File`), the change is: extend those helpers to
-accept "owner OR covering share with role EDITOR" (the covering logic already
-exists in `shareCoversFolder/File`), and lift the read-only flag in the share
-UI. Per-grant role overrides would be one nullable `role` column on
-`ShareGrant`. No tables added, none remodeled.
+**Per-user roles (viewer/editor).** `Share.role` already exists with `EDITOR`
+reserved. Every mutation route goes through the same ownership helpers
+(`requireOwnedRoom/Folder/File`) — extending those to accept "owner OR
+covering share with role EDITOR" is the whole change (the subtree-covering
+check already exists for read access). A per-grant override would be one
+nullable column on `ShareGrant`. No new tables.
 
-## Edge cases handled
+## Edge cases
 
-- Same-name upload → new version (not a duplicate, not an error)
-- Rename to a taken name → 409 with the message inline in the rename dialog
-- Move into a folder with a name clash → auto ` (2)` suffix, reported in the toast
-- "New folder" twice → `New folder (2)` (Finder behavior)
-- Deleting a folder/room warns with real subtree stats before anything happens
-- Share recipient browsing a folder that just got deleted → clean
-  "no longer available" screen, not a 500
-- Restricted link opened by the wrong account → explains which account is
-  signed in and what to do; opened signed-out → login, then straight back to
-  the share
-- Invite an email with no account yet → grant activates on registration
-- Public/restricted tokens are `crypto.randomBytes` — unguessable, and unknown
-  vs revoked vs deleted are indistinguishable from outside
-- Upload failures show per-file in the progress panel without killing the batch
+- Same name uploaded twice → new version, not a duplicate
+- Rename collision → 409, shown inline in the dialog
+- Move into a folder with a name clash → auto-suffixed, reported in the toast
+- "New folder" twice → `New folder (2)`
+- Delete a folder/room → real subtree stats shown before confirming
+- Folder gets deleted while someone's browsing a share into it → clean
+  "unavailable" screen, not a 500
+- Restricted link opened under the wrong account → tells you which account is
+  signed in; opened signed out → login, then back to the share
+- Invite an email with no account → grant attaches on registration
+- Tokens are `crypto.randomBytes` — unguessable; unknown/revoked/deleted all
+  look the same from outside
+- Upload cancel mid-transfer aborts the request (not just the UI); retry
+  reuses the same file, no re-picking
 
 ## Running locally
 
-Prereqs: Node 20+, pnpm, PostgreSQL running locally.
+Node 20+, pnpm, a local Postgres.
 
 ```bash
 pnpm install
-cp .env.example .env        # fill DATABASE_URL, AUTH_SECRET (openssl rand -base64 32)
+cp .env.example .env        # DATABASE_URL, AUTH_SECRET (openssl rand -base64 32)
 npx prisma migrate dev
 pnpm dev
 ```
 
-Without `BLOB_READ_WRITE_TOKEN`, uploads land in `.uploads/` on disk — the full
-flow works with no external services.
+No `BLOB_READ_WRITE_TOKEN` → uploads land in the OS temp dir. Everything else
+works with zero external services.
 
 ## Testing
 
-Three layers, each with a different DB story:
-
 ```bash
-pnpm test:unit          # lib/names.ts, lib/format.ts — pure functions, no DB
+pnpm test:unit          # lib/names.ts, lib/format.ts — pure, no DB
 pnpm test:integration   # route handlers + lib/access.ts against real Postgres
-pnpm test:e2e           # Playwright, drives a real build in a real browser
+pnpm test:e2e           # Playwright against a real build, real browser
 ```
 
-Unit tests need nothing set up. Integration and e2e each need `DATABASE_URL`
-pointing at a **disposable** database — they truncate it before running:
+Integration and e2e each want their own **disposable** database — they
+truncate it before running:
 
 ```bash
 createdb dataroom_test && DATABASE_URL=postgresql://…/dataroom_test npx prisma migrate deploy
@@ -229,53 +198,38 @@ DATABASE_URL=postgresql://…/dataroom_test pnpm test:integration
 DATABASE_URL=postgresql://…/dataroom_e2e AUTH_SECRET=test AUTH_TRUST_HOST=true pnpm test:e2e
 ```
 
-Integration tests call route handlers directly (no HTTP server) with
-`lib/auth`'s session lookup mocked to a fixed test user — real Prisma queries,
-no cookie/JWT plumbing to fake. E2E runs `next build && next start` and drives
-it with a real Chromium instance end to end: register → create room → nested
-folders → upload → version conflict → rename conflict → move → share (public
-link + revoke, restricted invite + wrong-account block).
+Integration tests call route handlers directly with `lib/auth`'s session
+lookup mocked to a fixed user — real Prisma queries, no cookie/JWT to fake.
+E2E drives `next build && next start` with real Chromium through the golden
+paths: register → room → nested folders → upload → version conflict → rename
+conflict → move → share (public + revoke, restricted invite + wrong-account
+block).
 
-**CI** (`.github/workflows/ci.yml`) runs on every push to `main` and every PR:
-typecheck + lint + build, unit tests, and integration tests (Postgres as a
-GitHub Actions service container). **E2E only runs on pull requests** — it's a
-gate before merging into `main`, not a check against anything deployed; the
-whole app and its database are spun up fresh inside that CI job and thrown
-away afterward, so there's nothing running on a real server to break.
+CI (`.github/workflows/ci.yml`) runs typecheck/lint/build + unit/integration
+on every push to `main` and every PR. E2E only runs on PRs — a gate before
+merging, not a check against anything deployed; app and DB are both thrown
+away at the end of that job.
 
 ## Deploying
 
-1. **Neon** (or any Postgres): create a database, copy the connection string.
-2. **Vercel**: import the repo → set env vars `DATABASE_URL`, `AUTH_SECRET`,
-   `AUTH_TRUST_HOST=true` → add a **Blob store** (Storage tab; injects
-   `BLOB_READ_WRITE_TOKEN` automatically).
-3. Run migrations against the prod DB: `DATABASE_URL=… npx prisma migrate deploy`.
-4. Optional Google sign-in: create OAuth credentials, set
-   `GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET`, add
-   `https://<your-domain>/api/auth/callback/google` as the redirect URI.
+1. Postgres (Neon or similar) — grab the connection string.
+2. Vercel: import repo → set `DATABASE_URL`, `AUTH_SECRET`, `AUTH_TRUST_HOST=true`
+   → Storage tab → add a **Blob store** (injects `BLOB_READ_WRITE_TOKEN`).
+3. `DATABASE_URL=… npx prisma migrate deploy` against the prod DB.
+4. Optional Google: OAuth credentials, set `GOOGLE_CLIENT_ID`/`SECRET`, redirect
+   URI `https://<domain>/api/auth/callback/google`.
 
-The build command is the default (`next build`; `prisma generate` runs via
-`postinstall`).
+Default build command (`next build`); `prisma generate` runs via `postinstall`.
 
-## Where and how AI was used
+## AI usage note
 
-I built this with Claude (Claude Code) as a pair programmer, and directed the
-work: the product decisions (single deployable, direct-to-blob uploads,
-proxied downloads, materialized paths, the polymorphic share model, versioning
-semantics) came out of a design discussion I steered, and I reviewed the code
-it produced. Claude wrote the bulk of the implementation and the first pass of
-this README; testing was done hands-on against a local Postgres — every flow
-in "What's implemented" (uploads, versioning, conflicts, share/revoke,
-wrong-account and deleted-mid-browse paths) was exercised in a real browser
-before it went in. Bugs found in that testing (a Radix `asChild` prop
-forwarding issue, hover-only actions being unreachable on touch) were fixed
-the same way.
-
-The test suite and CI workflow followed the same pattern: I specified the
-shape (unit vs. integration vs. e2e, what runs where, e2e gated to PRs so it
-never touches a real server) before anything was written, then the tests were
-actually run — not just generated — against local Postgres instances and a
-real Chromium browser. The first e2e run caught five real issues (ambiguous
-locators matching leftover DOM, an unlabeled select breaking `getByLabel`, a
-sign-out race), which were fixed and re-run to green rather than left in the
-diff.
+Built with Claude as a pair programmer — I drove the design decisions (single
+deployable, direct-to-blob uploads, proxied downloads, materialized paths, the
+polymorphic share model) and reviewed the output; Claude wrote most of the
+implementation. Every flow was exercised by hand against a running instance,
+not just read — that's how the Radix `asChild` prop bug, the hover-only
+touch-target bug, and the Google OAuth client-id bug got caught. Same for the
+tests: I specified the shape (unit/integration/e2e split, e2e gated to PRs so
+it never touches a live server), then they were actually run — the first e2e
+pass caught five real issues (stale-DOM locators, an unlabeled select, a
+sign-out race) that got fixed before anything shipped.
