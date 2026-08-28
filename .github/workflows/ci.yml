@@ -25,6 +25,10 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      # `tsc` needs Next's generated route types (.next/types) to know
+      # about globals like LayoutProps — `next build` would create them too,
+      # but typegen does it without a full build.
+      - run: npx next typegen
       - run: pnpm typecheck
       - run: pnpm typecheck:tests
       - run: pnpm lint
