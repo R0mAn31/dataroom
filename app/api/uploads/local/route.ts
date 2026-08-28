@@ -13,6 +13,14 @@ export const POST = handleApi(async (request: Request) => {
   if (storageMode() !== "local") {
     throw new ApiError(400, "Direct uploads are disabled when Blob storage is configured.");
   }
+  // On Vercel the filesystem is read-only, so without a Blob store there is
+  // nowhere to put the bytes — fail with an actionable message instead of 500.
+  if (process.env.VERCEL) {
+    throw new ApiError(
+      503,
+      "File storage isn't configured: add a Blob store to this Vercel project (Storage → Create Database → Blob), then redeploy."
+    );
+  }
 
   const form = await request.formData();
   const file = form.get("file");

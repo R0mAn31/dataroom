@@ -32,7 +32,13 @@ const providers: NextAuthConfig["providers"] = [
 
 if (googleEnabled) {
   providers.push(
-    Google({ allowDangerousEmailAccountLinking: true })
+    Google({
+      // Auth.js only auto-reads AUTH_GOOGLE_ID/AUTH_GOOGLE_SECRET; we document
+      // GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET, so pass them explicitly.
+      clientId: process.env.GOOGLE_CLIENT_ID,
+      clientSecret: process.env.GOOGLE_CLIENT_SECRET,
+      allowDangerousEmailAccountLinking: true,
+    })
   );
 }
 
