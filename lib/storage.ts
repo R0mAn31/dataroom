@@ -3,6 +3,7 @@ import { createReadStream } from "fs";
 import { mkdir, unlink, writeFile } from "fs/promises";
 import { Readable } from "stream";
 import crypto from "crypto";
+import os from "os";
 import path from "path";
 
 /**
@@ -19,7 +20,10 @@ export function storageMode(): StorageMode {
   return process.env.BLOB_READ_WRITE_TOKEN ? "blob" : "local";
 }
 
-const LOCAL_DIR = path.join(process.cwd(), ".uploads");
+// Outside the project directory on purpose: Next's dev-mode file watcher
+// treats anything written under the project root as a reason to reload,
+// which would interrupt an in-progress local upload.
+const LOCAL_DIR = path.join(os.tmpdir(), "dataroom-uploads");
 const LOCAL_PREFIX = "local:";
 
 export async function saveLocalFile(data: ArrayBuffer): Promise<string> {

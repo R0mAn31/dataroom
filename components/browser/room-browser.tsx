@@ -22,7 +22,7 @@ import type {
   Crumb,
   ShareResource,
 } from "@/lib/types";
-import { uploadFile } from "@/lib/upload-client";
+import { UploadCancelledError, uploadFile } from "@/lib/upload-client";
 import { Breadcrumbs } from "@/components/browser/breadcrumbs";
 import { ItemTable } from "@/components/browser/item-table";
 import { MoveFileDialog } from "@/components/browser/move-file-dialog";
@@ -62,6 +62,10 @@ export function RoomBrowser({
   const router = useRouter();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const dragDepth = useRef(0);
+  // Keyed by upload task id — outside React state since neither a File nor
+  // an AbortController needs to trigger a re-render on its own.
+  const uploadFiles = useRef(new Map<string, File>());
+  const uploadControllers = useRef(new Map<string, AbortController>());
 
   const [creatingFolder, setCreatingFolder] = useState(false);
   const [renamingFolder, setRenamingFolder] = useState<BrowserFolder | null>(null);
@@ -82,42 +86,73 @@ export function RoomBrowser({
     setUploads((prev) => prev.map((t) => (t.id === id ? { ...t, ...patch } : t)));
   }
 
-  async function startUploads(incoming: File[]) {
+  /** Runs one upload attempt end to end; shared by first attempts and retries. */
+  async function runUpload(taskId: string) {
+    const file = uploadFiles.current.get(taskId);
+    if (!file) return;
+
+    const controller = new AbortController();
+    uploadControllers.current.set(taskId, controller);
+    try {
+      const { version } = await uploadFile(
+        file,
+        { roomId, folderId, mode: storageMode },
+        (progress) => patchTask(taskId, { progress }),
+        controller.signal
+      );
+      patchTask(taskId, { status: "done", progress: 100, version });
+      router.refresh();
+    } catch (err) {
+      if (err instanceof UploadCancelledError) {
+        patchTask(taskId, { status: "cancelled" });
+      } else {
+        patchTask(taskId, {
+          status: "error",
+          error: err instanceof Error ? err.message : "Upload failed. Try again.",
+        });
+      }
+    } finally {
+      uploadControllers.current.delete(taskId);
+    }
+  }
+
+  function startUploads(incoming: File[]) {
     if (!incoming.length) return;
-    const queue = incoming.map((file) => ({
-      file,
-      task: {
-        id: crypto.randomUUID(),
+    const taskIds = incoming.map((file) => {
+      const id = crypto.randomUUID();
+      uploadFiles.current.set(id, file);
+      return id;
+    });
+    setUploads((prev) => [
+      ...prev,
+      ...incoming.map((file, i) => ({
+        id: taskIds[i],
         name: file.name,
         size: file.size,
         progress: 0,
         status: "uploading" as const,
-      },
-    }));
-    setUploads((prev) => [...prev, ...queue.map((q) => q.task)]);
+      })),
+    ]);
 
-    const pending = [...queue];
-    await Promise.all(
-      Array.from({ length: Math.min(UPLOAD_CONCURRENCY, pending.length) }, async () => {
-        for (let next = pending.shift(); next; next = pending.shift()) {
-          const { file, task } = next;
-          try {
-            const { version } = await uploadFile(
-              file,
-              { roomId, folderId, mode: storageMode },
-              (progress) => patchTask(task.id, { progress })
-            );
-            patchTask(task.id, { status: "done", progress: 100, version });
-            router.refresh();
-          } catch (err) {
-            patchTask(task.id, {
-              status: "error",
-              error: err instanceof Error ? err.message : "Upload failed. Try again.",
-            });
-          }
+    const pending = [...taskIds];
+    // Fire-and-forget: each worker pulls the next queued id until empty.
+    // Cancel/retry act on individual tasks and don't block this queue.
+    for (let worker = 0; worker < Math.min(UPLOAD_CONCURRENCY, pending.length); worker++) {
+      (async () => {
+        for (let id = pending.shift(); id; id = pending.shift()) {
+          await runUpload(id);
         }
-      })
-    );
+      })();
+    }
+  }
+
+  function cancelUpload(taskId: string) {
+    uploadControllers.current.get(taskId)?.abort();
+  }
+
+  function retryUpload(taskId: string) {
+    patchTask(taskId, { status: "uploading", progress: 0, error: undefined });
+    runUpload(taskId);
   }
 
   function handleFileInput(event: React.ChangeEvent<HTMLInputElement>) {
@@ -383,7 +418,18 @@ export function RoomBrowser({
 
       <UploadPanel
         tasks={uploads}
-        onClear={() => setUploads((prev) => prev.filter((t) => t.status === "uploading"))}
+        onClear={() =>
+          setUploads((prev) => {
+            const keep = prev.filter((t) => t.status === "uploading");
+            const keepIds = new Set(keep.map((t) => t.id));
+            for (const id of uploadFiles.current.keys()) {
+              if (!keepIds.has(id)) uploadFiles.current.delete(id);
+            }
+            return keep;
+          })
+        }
+        onCancel={cancelUpload}
+        onRetry={retryUpload}
       />
     </div>
   );

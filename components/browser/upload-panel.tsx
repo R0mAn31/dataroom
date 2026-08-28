@@ -1,6 +1,6 @@
 "use client";
 
-import { AlertCircle, CheckCircle2, X } from "lucide-react";
+import { AlertCircle, CheckCircle2, RotateCcw, X } from "lucide-react";
 import { formatBytes } from "@/lib/format";
 import { Progress } from "@/components/ui/progress";
 import { Button } from "@/components/ui/button";
@@ -10,7 +10,7 @@ export type UploadTask = {
   name: string;
   size: number;
   progress: number;
-  status: "uploading" | "done" | "error";
+  status: "uploading" | "done" | "error" | "cancelled";
   /** Set when the upload became version 2+ of an existing file. */
   version?: number;
   error?: string;
@@ -19,9 +19,13 @@ export type UploadTask = {
 export function UploadPanel({
   tasks,
   onClear,
+  onCancel,
+  onRetry,
 }: {
   tasks: UploadTask[];
   onClear: () => void;
+  onCancel: (id: string) => void;
+  onRetry: (id: string) => void;
 }) {
   if (tasks.length === 0) return null;
 
@@ -49,7 +53,7 @@ export function UploadPanel({
       </div>
       <ul className="max-h-64 overflow-y-auto p-2">
         {tasks.map((task) => (
-          <li key={task.id} className="rounded-md px-1.5 py-1.5">
+          <li key={task.id} className="group rounded-md px-1.5 py-1.5">
             <div className="flex items-center gap-2">
               <span className="min-w-0 flex-1 truncate text-sm">{task.name}</span>
               {task.status === "done" &&
@@ -61,7 +65,43 @@ export function UploadPanel({
                   <CheckCircle2 className="size-4 shrink-0 text-primary" />
                 ))}
               {task.status === "error" && (
-                <AlertCircle className="size-4 shrink-0 text-destructive" />
+                <>
+                  <AlertCircle className="size-4 shrink-0 text-destructive" />
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="size-6 shrink-0 text-muted-foreground"
+                    onClick={() => onRetry(task.id)}
+                    aria-label={`Retry uploading ${task.name}`}
+                  >
+                    <RotateCcw className="size-3.5" />
+                  </Button>
+                </>
+              )}
+              {task.status === "cancelled" && (
+                <>
+                  <span className="shrink-0 text-xs text-muted-foreground">Cancelled</span>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="size-6 shrink-0 text-muted-foreground"
+                    onClick={() => onRetry(task.id)}
+                    aria-label={`Retry uploading ${task.name}`}
+                  >
+                    <RotateCcw className="size-3.5" />
+                  </Button>
+                </>
+              )}
+              {task.status === "uploading" && (
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="size-6 shrink-0 text-muted-foreground opacity-0 transition-opacity focus-visible:opacity-100 group-hover:opacity-100"
+                  onClick={() => onCancel(task.id)}
+                  aria-label={`Cancel uploading ${task.name}`}
+                >
+                  <X className="size-3.5" />
+                </Button>
               )}
             </div>
             {task.status === "uploading" && (
