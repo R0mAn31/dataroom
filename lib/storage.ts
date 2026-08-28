@@ -1,4 +1,4 @@
-import { del } from "@vercel/blob";
+import { del, get } from "@vercel/blob";
 import { createReadStream } from "fs";
 import { mkdir, unlink, writeFile } from "fs/promises";
 import { Readable } from "stream";
@@ -45,10 +45,17 @@ export async function readStoredFile(
     }
   }
 
-  const res = await fetch(storageKey);
-  if (!res.ok || !res.body) return null;
-  const size = Number(res.headers.get("content-length")) || undefined;
-  return { stream: res.body, size };
+  // Blobs are uploaded with access: "private" — the raw URL isn't fetchable
+  // without the read-write token, which get() applies for us. We never hand
+  // this URL to a client anyway; every download goes through our own
+  // access-checked route (see app/api/files/[fileId]/content).
+  try {
+    const result = await get(storageKey, { access: "private" });
+    if (!result?.stream) return null; // null on a 304, which we never trigger
+    return { stream: result.stream, size: result.blob.size ?? undefined };
+  } catch {
+    return null;
+  }
 }
 
 /** Best-effort cleanup; storage orphans are preferable to broken metadata. */

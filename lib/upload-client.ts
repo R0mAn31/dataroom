@@ -45,7 +45,7 @@ async function uploadToBlob(
 ): Promise<string> {
   const { upload } = await import("@vercel/blob/client");
   const blob = await upload(file.name, file, {
-    access: "public",
+    access: "private",
     handleUploadUrl: "/api/uploads/blob",
     clientPayload: JSON.stringify({ roomId: target.roomId }),
     onUploadProgress: ({ percentage }) => onProgress(percentage),
